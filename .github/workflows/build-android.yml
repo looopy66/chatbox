@@ -1,0 +1,80 @@
+name: Build Chatbox (Android)
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    name: 🤖 Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 获取 pnpm 缓存目录
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: 缓存 pnpm 依赖
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 设置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 设置 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 生成 Capacitor 资源（图标等）
+        run: pnpm run mobile:assets
+
+      # 构建 Web 部分
+      - name: 构建 Web 部分（Android 环境）
+        run: pnpm exec electron-vite build
+        env:
+          CHATBOX_BUILD_TARGET: mobile_app
+          CHATBOX_BUILD_PLATFORM: android
+
+      # 添加 Android 原生平台（关键步骤）
+      - name: 添加 Android 平台
+        run: npx cap add android
+
+      # 同步 Capacitor 配置
+      - name: 同步 Capacitor 配置到 Android
+        run: npx cap sync android
+
+      # 构建 APK
+      - name: 构建 Android APK (Release)
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: 上传 Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatbox-android
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
