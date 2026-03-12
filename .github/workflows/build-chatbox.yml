@@ -3,7 +3,7 @@ name: Build Chatbox (Windows + Android)
 on:
   push:
     branches: [ main, master, develop ]
-  workflow_dispatch:        # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   # ---------- Windows 构建 ----------
@@ -18,11 +18,10 @@ jobs:
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'                # 严格符合 package.json 要求
+          node-version: '20'
 
-      - name: 安装 pnpm（自动读取 packageManager 版本）
+      - name: 安装 pnpm（自动读取 packageManager）
         uses: pnpm/action-setup@v4
-        # 不指定 version，让 action 自动从 package.json 读取
 
       - name: 获取 pnpm 缓存目录
         id: pnpm-cache
@@ -40,14 +39,20 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      # 创建空的签名脚本，避免 custom_win_sign.js 缺失
+      - name: 创建空的签名脚本
+        run: |
+          echo "module.exports = { sign: (configuration) => Promise.resolve() };" > custom_win_sign.js
+        shell: bash
+
       - name: 构建 Windows 应用
         run: |
           pnpm run build
           pnpm exec electron-builder build --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 根据分支设置更新通道：主分支用 latest，其他分支用 beta
           UPDATE_CHANNEL: ${{ github.ref == 'refs/heads/main' && 'latest' || 'beta' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false   # 禁用代码签名
 
       - name: 上传 Windows 安装包
         uses: actions/upload-artifact@v4
@@ -75,7 +80,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: 安装 pnpm（自动读取 packageManager 版本）
+      - name: 安装 pnpm
         uses: pnpm/action-setup@v4
 
       - name: 获取 pnpm 缓存目录
@@ -105,9 +110,12 @@ jobs:
       - name: 生成 Capacitor 资源（图标等）
         run: pnpm run mobile:assets
 
-      # 手动执行构建和同步，跳过缺失的 delete-sourcemaps 脚本
+      # 改用 env 设置环境变量，避免 cross-env 未找到
       - name: 构建 Web 部分（Android 环境）
-        run: cross-env CHATBOX_BUILD_TARGET=mobile_app CHATBOX_BUILD_PLATFORM=android electron-vite build
+        run: electron-vite build
+        env:
+          CHATBOX_BUILD_TARGET: mobile_app
+          CHATBOX_BUILD_PLATFORM: android
 
       - name: 同步 Capacitor 配置到 Android
         run: npx cap sync android
