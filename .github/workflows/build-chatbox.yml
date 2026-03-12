@@ -3,7 +3,7 @@ name: Build Chatbox (Windows + Android)
 on:
   push:
     branches: [ main, master, develop ]
-  workflow_dispatch:
+  workflow_dispatch:        # 允许手动触发
 
 jobs:
   # ---------- Windows 构建 ----------
@@ -20,9 +20,9 @@ jobs:
         with:
           node-version: '20'                # 严格符合 package.json 要求
 
-      - name: 安装 pnpm
+      - name: 安装 pnpm（自动读取 packageManager 版本）
         uses: pnpm/action-setup@v4
-        # 不再指定 version，让 action 从 package.json 自动读取
+        # 不指定 version，让 action 自动从 package.json 读取
 
       - name: 获取 pnpm 缓存目录
         id: pnpm-cache
@@ -46,6 +46,8 @@ jobs:
           pnpm exec electron-builder build --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 根据分支设置更新通道：主分支用 latest，其他分支用 beta
+          UPDATE_CHANNEL: ${{ github.ref == 'refs/heads/main' && 'latest' || 'beta' }}
 
       - name: 上传 Windows 安装包
         uses: actions/upload-artifact@v4
@@ -73,9 +75,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: 安装 pnpm
+      - name: 安装 pnpm（自动读取 packageManager 版本）
         uses: pnpm/action-setup@v4
-        # 自动从 packageManager 读取版本
 
       - name: 获取 pnpm 缓存目录
         id: pnpm-cache
@@ -101,11 +102,15 @@ jobs:
       - name: 设置 Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: 生成 Capacitor 资源
+      - name: 生成 Capacitor 资源（图标等）
         run: pnpm run mobile:assets
 
-      - name: 同步 Android 平台代码
-        run: pnpm run mobile:sync:android
+      # 手动执行构建和同步，跳过缺失的 delete-sourcemaps 脚本
+      - name: 构建 Web 部分（Android 环境）
+        run: cross-env CHATBOX_BUILD_TARGET=mobile_app CHATBOX_BUILD_PLATFORM=android electron-vite build
+
+      - name: 同步 Capacitor 配置到 Android
+        run: npx cap sync android
 
       - name: 构建 Android APK (Release)
         working-directory: android
