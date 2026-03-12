@@ -3,7 +3,7 @@ name: Build Chatbox (Windows + Android)
 on:
   push:
     branches: [ main, master, develop ]
-  workflow_dispatch:        # 支持手动触发
+  workflow_dispatch:
 
 jobs:
   # ---------- Windows 构建 ----------
@@ -22,9 +22,7 @@ jobs:
 
       - name: 安装 pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
-          run_install: false
+        # 不再指定 version，让 action 从 package.json 自动读取
 
       - name: 获取 pnpm 缓存目录
         id: pnpm-cache
@@ -47,7 +45,7 @@ jobs:
           pnpm run build
           pnpm exec electron-builder build --win --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # electron-builder 需要
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 上传 Windows 安装包
         uses: actions/upload-artifact@v4
@@ -77,9 +75,7 @@ jobs:
 
       - name: 安装 pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
-          run_install: false
+        # 自动从 packageManager 读取版本
 
       - name: 获取 pnpm 缓存目录
         id: pnpm-cache
@@ -105,7 +101,7 @@ jobs:
       - name: 设置 Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: 生成 Capacitor 资源（图标等）
+      - name: 生成 Capacitor 资源
         run: pnpm run mobile:assets
 
       - name: 同步 Android 平台代码
