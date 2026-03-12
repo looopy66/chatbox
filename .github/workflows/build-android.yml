@@ -56,14 +56,43 @@ jobs:
           CHATBOX_BUILD_TARGET: mobile_app
           CHATBOX_BUILD_PLATFORM: android
 
-      # 初始化 Capacitor 配置（如果 capacitor.config.json 不存在）
-      - name: 初始化 Capacitor 配置
+      # 🔍 探测构建输出目录（自动查找 index.html 所在路径）
+      - name: 探测 Web 构建输出目录
+        id: detect-webdir
         run: |
-          if [ ! -f capacitor.config.json ]; then
-            npx cap init Chatbox xyz.chatboxapp.ce
-          else
-            echo "capacitor.config.json already exists, skipping init."
-          fi
+          # 常见可能的输出目录列表（按可能性排序）
+          POSSIBLE_DIRS=(
+            "release/app/dist/renderer"
+            "dist"
+            "build"
+            "out"
+            "www"
+            "release/app/dist"
+            "app/dist"
+          )
+          for dir in "${POSSIBLE_DIRS[@]}"; do
+            if [ -f "$dir/index.html" ]; then
+              echo "✅ 找到 index.html 在: $dir"
+              echo "WEB_DIR=$dir" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          done
+          echo "❌ 错误：无法找到包含 index.html 的输出目录" >&2
+          exit 1
+
+      # ⚙️ 动态生成 Capacitor 配置文件（使用探测到的路径）
+      - name: 生成 Capacitor 配置文件
+        run: |
+          WEB_DIR="${{ steps.detect-webdir.outputs.WEB_DIR }}"
+          cat > capacitor.config.json <<EOF
+          {
+            "appId": "xyz.chatboxapp.ce",
+            "appName": "Chatbox",
+            "webDir": "${WEB_DIR}",
+            "bundledWebRuntime": false
+          }
+          EOF
+          echo "✅ 已生成 capacitor.config.json，webDir = ${WEB_DIR}"
 
       # 添加 Android 原生平台
       - name: 添加 Android 平台
