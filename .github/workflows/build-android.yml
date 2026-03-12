@@ -1,51 +1,57 @@
 name: Build Chatbox (Android)
 
-# --------------------------------------------------------------
-# 触发方式
-# --------------------------------------------------------------
 on:
   push:
-    branches: [ main, master, develop ]   # 代码推送到这些分支时自动跑
-  workflow_dispatch:                     # 手动触发
+    branches: [ main, master, develop ]
+  workflow_dispatch:
     inputs:
       release:
-        description: "是否在本次运行结束后创建 GitHub Release（仅在 tag 推送时生效）"
+        description: "在本次运行结束后创建 GitHub Release（仅在 tag 推送时有效）"
         required: false
         default: "false"
 
-# --------------------------------------------------------------
-# 主作业：构建 Android APK
-# --------------------------------------------------------------
 jobs:
   build-android:
     name: 🤖 Android APK
     runs-on: ubuntu-latest
     permissions:
-      contents: read          # checkout
-      packages: read          # pnpm registry (如使用私有 registry)
-      id-token: write        # 用于 gh CLI 创建 Release（可选）
+      contents: read
+      packages: read
+      id-token: write   # 用于 gh CLI（创建 Release）可选
 
     steps:
-      # ---------- 检出源码 ----------
+      # -----------------------------------------------------------------
+      # 1️⃣ 检出代码
+      # -----------------------------------------------------------------
       - name: 检出代码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # 为后续获取 tag 信息做准备
+          fetch-depth: 0   # 为后面的 tag 操作保留完整历史
 
-      # ---------- Node + pnpm ----------
-      - name: 安装 Node.js
+      # -----------------------------------------------------------------
+      # 2️⃣ 安装 Node.js（含 npm）——这里不需要缓存 pnpm，后面会单独装
+      # -----------------------------------------------------------------
+      - name: 安装 Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'   # 自动缓存 node_modules
+          cache: 'pnpm'   # 只会把 node_modules 缓存起来，pnpm 本身仍需单独安装
 
+      # -----------------------------------------------------------------
+      # 3️⃣ 安装 pnpm（关键！）
+      # -----------------------------------------------------------------
       - name: 安装 pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9   # 如需其他版本请自行修改
+          version: 9            # 你想要的 pnpm 版本（最新 9.x）
+          run_install: false    # 只负责把 pnpm 放进 PATH，不执行 install
+          # ⚠️ 下面的 `cache: true` 会把 pnpm 本身的 store 目录缓存，后面再用
+          cache: true
 
-      # ---------- pnpm 缓存 ----------
-      - name: 获取 pnpm 缓存目录
+      # -----------------------------------------------------------------
+      # 4️⃣ 缓存 pnpm store（提升后续安装速度）
+      # -----------------------------------------------------------------
+      - name: 获取 pnpm Store 目录
         id: pnpm-cache
         run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
 
@@ -57,43 +63,55 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
-      # ---------- 安装项目依赖 ----------
+      # -----------------------------------------------------------------
+      # 5️⃣ 安装项目依赖（pnpm 已经在 PATH 中，下面会直接生效）
+      # -----------------------------------------------------------------
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      # ---------- JDK ----------
+      # -----------------------------------------------------------------
+      # 6️⃣ 安装 JDK 21（并开启 Gradle 缓存）
+      # -----------------------------------------------------------------
       - name: 设置 JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
-          cache: 'gradle'   # Gradle 缓存（加速后续编译）
+          cache: 'gradle'
 
-      # ---------- Android SDK ----------
+      # -----------------------------------------------------------------
+      # 7️⃣ 安装 Android SDK（官方 action，自动加入 PATH）
+      # -----------------------------------------------------------------
       - name: 设置 Android SDK
         uses: android-actions/setup-android@v3
         with:
           api-level: 34          # 目前最新的 API
-          ndk-version: 26.1.10909125   # 如有需要可自行修改
+          ndk-version: 26.1.10909125
           cache: true
 
-      # ---------- 生成 Capacitor 资源 ----------
-      - name: 生成 Capacitor 资源（图标等）
+      # -----------------------------------------------------------------
+      # 8️⃣ 生成 Capacitor 资源（图标、Splash 等）
+      # -----------------------------------------------------------------
+      - name: 生成 Capacitor 资源
         run: pnpm run mobile:assets
 
-      # ---------- 构建 Web（Electron‑Vite） ----------
-      - name: 构建 Web 部分（Android 环境）
+      # -----------------------------------------------------------------
+      # 9️⃣ 构建 Web（Electron‑Vite）——输出目录稍后会自动检测
+      # -----------------------------------------------------------------
+      - name: 构建 Web（Android 环境）
         run: pnpm exec electron-vite build
         env:
           CHATBOX_BUILD_TARGET: mobile_app
           CHATBOX_BUILD_PLATFORM: android
 
-      # ---------- 探测 Web 输出目录 ----------
+      # -----------------------------------------------------------------
+      # 🔎 探测 Web 构建输出目录
+      # -----------------------------------------------------------------
       - name: 探测 Web 构建输出目录
         id: detect-webdir
         run: |
           set -e
-          POSSIBLE_DIRS=(
+          CANDIDATES=(
             "release/app/dist/renderer"
             "dist"
             "build"
@@ -102,18 +120,20 @@ jobs:
             "release/app/dist"
             "app/dist"
           )
-          for dir in "${POSSIBLE_DIRS[@]}"; do
-            if [ -f "$dir/index.html" ]; then
-              echo "✅ 找到 index.html 在: $dir"
-              echo "WEB_DIR=$dir" >> $GITHUB_OUTPUT
+          for d in "${CANDIDATES[@]}"; do
+            if [ -f "$d/index.html" ]; then
+              echo "✅ 找到 index.html → $d"
+              echo "WEB_DIR=$d" >> $GITHUB_OUTPUT
               exit 0
             fi
           done
-          echo "❌ 错误：无法找到包含 index.html 的输出目录" >&2
+          echo "❌ 未找到 index.html" >&2
           exit 1
 
-      # ---------- 生成 Capacitor 配置 ----------
-      - name: 生成 Capacitor 配置文件
+      # -----------------------------------------------------------------
+      # 📱 生成 Capacitor 配置文件
+      # -----------------------------------------------------------------
+      - name: 生成 capacitor.config.json
         run: |
           WEB_DIR="${{ steps.detect-webdir.outputs.WEB_DIR }}"
           cat > capacitor.config.json <<EOF
@@ -124,25 +144,28 @@ jobs:
             "bundledWebRuntime": false
           }
           EOF
-          echo "✅ 已生成 capacitor.config.json，webDir = ${WEB_DIR}"
-        # 把生成的文件保存为 artifact，方便后续检查
-      - name: 保存 Capacitor 配置为 artifact
+          echo "✅ capacitor.config.json 已生成，webDir=${WEB_DIR}"
+        # 把配置文件也保存为 artifact，方便调试
+      - name: 保存 Capacitor 配置
         uses: actions/upload-artifact@v4
         with:
           name: capacitor-config
           path: capacitor.config.json
           retention-days: 30
 
-      # ---------- 添加 Android 平台 ----------
+      # -----------------------------------------------------------------
+      # 🛠 添加 Android 平台并同步
+      # -----------------------------------------------------------------
       - name: 添加 Android 平台
         run: npx cap add android
 
-      # ---------- 同步 Capacitor 配置 ----------
-      - name: 同步 Capacitor 配置到 Android
+      - name: 同步 Capacitor 到 Android
         run: npx cap sync android
 
-      # ---------- Gradle 缓存 ----------
-      - name: Gradle 缓存准备
+      # -----------------------------------------------------------------
+      # 🔧 Gradle 缓存（加速后续编译）
+      # -----------------------------------------------------------------
+      - name: Gradle 缓存
         uses: actions/cache@v4
         with:
           path: |
@@ -152,7 +175,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      # ---------- 构建 Android APK ----------
+      # -----------------------------------------------------------------
+      # 📦 构建 Android Release APK
+      # -----------------------------------------------------------------
       - name: 构建 Android APK (Release)
         working-directory: android
         env:
@@ -161,7 +186,9 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace
 
-      # ---------- 上传 APK ----------
+      # -----------------------------------------------------------------
+      # 📤 上传 APK（Artifact）
+      # -----------------------------------------------------------------
       - name: 上传 Android APK
         uses: actions/upload-artifact@v4
         with:
@@ -170,19 +197,20 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-# --------------------------------------------------------------
-# 可选：在 Tag 推送且用户勾选 “release” 时创建 Release 并附加 APK
-# --------------------------------------------------------------
+  # -----------------------------------------------------------------
+  # 🎉 可选：在 Tag 推送且 release 参数为 true 时自动创建 Release
+  # -----------------------------------------------------------------
   release-on-tag:
     name: 📦 Create Release (if tag)
     needs: build-android
     runs-on: ubuntu-latest
+    # 仅在推送 tag 且用户选择 “release” 时运行
     if: |
       github.event_name == 'push' &&
       startsWith(github.ref, 'refs/tags/') &&
       (github.event.inputs.release == 'true' || github.event.inputs.release == '')
     permissions:
-      contents: write   # 创建 Release
+      contents: write
     steps:
       - name: 下载 APK Artifact
         uses: actions/download-artifact@v4
@@ -194,9 +222,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="${GITHUB_REF#refs/tags/}"
-          gh release create "$TAG_NAME" \
-            --title "Chatbox Android $TAG_NAME" \
-            --notes "自动构建的 Android APK（Release 构建），基于 commit $(git rev-parse --short HEAD)." \
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" \
+            --title "Chatbox Android $TAG" \
+            --notes "自动构建的 Android Release APK（基于 commit $(git rev-parse --short HEAD)）" \
             ./apk/*.apk \
-            || gh release upload "$TAG_NAME" ./apk/*.apk --clobber
+            || gh release upload "$TAG" ./apk/*.apk --clobber
