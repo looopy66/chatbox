@@ -1,0 +1,126 @@
+name: Build Chatbox (Windows + Android)
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  workflow_dispatch:        # 支持手动触发
+
+jobs:
+  # ---------- Windows 构建 ----------
+  build-windows:
+    name: 🪟 Windows Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'                # 严格符合 package.json 要求
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: 获取 pnpm 缓存目录
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path)" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: 缓存 pnpm 依赖
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建 Windows 应用
+        run: |
+          pnpm run build
+          pnpm exec electron-builder build --win --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # electron-builder 需要
+
+      - name: 上传 Windows 安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatbox-windows
+          path: |
+            dist/**/*.exe
+            dist/**/*.msi
+            release/**/*.exe
+            release/**/*.msi
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------- Android 构建 ----------
+  build-android:
+    name: 🤖 Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      - name: 获取 pnpm 缓存目录
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: 缓存 pnpm 依赖
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 设置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 设置 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 生成 Capacitor 资源（图标等）
+        run: pnpm run mobile:assets
+
+      - name: 同步 Android 平台代码
+        run: pnpm run mobile:sync:android
+
+      - name: 构建 Android APK (Release)
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: 上传 Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatbox-android
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
