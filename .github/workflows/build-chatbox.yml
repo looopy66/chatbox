@@ -110,9 +110,9 @@ jobs:
       - name: 生成 Capacitor 资源（图标等）
         run: pnpm run mobile:assets
 
-      # 改用 env 设置环境变量，避免 cross-env 未找到
+      # 使用 pnpm exec 运行 electron-vite，确保命令存在
       - name: 构建 Web 部分（Android 环境）
-        run: electron-vite build
+        run: pnpm exec electron-vite build
         env:
           CHATBOX_BUILD_TARGET: mobile_app
           CHATBOX_BUILD_PLATFORM: android
