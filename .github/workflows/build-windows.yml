@@ -1,0 +1,66 @@
+name: Build Chatbox (Windows)
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: 🪟 Windows Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 pnpm（自动读取 packageManager）
+        uses: pnpm/action-setup@v4
+
+      - name: 获取 pnpm 缓存目录
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path)" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: 缓存 pnpm 依赖
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # 创建空的签名脚本，避免 custom_win_sign.js 缺失
+      - name: 创建空的签名脚本
+        run: |
+          echo "module.exports = { sign: (configuration) => Promise.resolve() };" > custom_win_sign.js
+        shell: bash
+
+      - name: 构建 Windows 应用
+        run: |
+          pnpm run build
+          pnpm exec electron-builder build --win --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_CHANNEL: ${{ github.ref == 'refs/heads/main' && 'latest' || 'beta' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false   # 禁用代码签名
+
+      - name: 上传 Windows 安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatbox-windows
+          path: |
+            dist/**/*.exe
+            dist/**/*.msi
+            release/**/*.exe
+            release/**/*.msi
+          if-no-files-found: error
+          retention-days: 30
