@@ -1,21 +1,99 @@
-push:
- branches: ["main"]
- pull_request:
+name: Build Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'          # 当推送形如 v1.2.3 的 tag 时触发
+  workflow_dispatch:  # 也可以手动触发
 
 jobs:
- build-android:
- runs-on: ubuntu-latest steps:
- - uses: actions/checkout@v4 - name: Set up JDK uses: actions/setup-java@v4 with:
- distribution: temurin java-version: "17"
+  build-apk:
+    runs-on: ubuntu-latest
+    env:
+      NODE_VERSION: '20'            # 与项目要求保持一致
+      JAVA_VERSION: '17'            # Android 编译需要的 JDK
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+      ANDROID_HOME: ${{ runner.temp }}/android-sdk
+    steps:
+      # 1️⃣ 检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 获取完整历史以读取 tag
 
- - name: Set up Node uses: actions/setup-node@v4 with:
- node-version: "20"
- cache: "pnpm"
+      # 2️⃣ 安装 Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'      # 若使用 pnpm，请改为 'pnpm'
 
- - name: Set up pnpm uses: pnpm/action-setup@v4 with:
- version: "10"
+      # 3️⃣ 安装 Java（Android 编译所需）
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
 
- - name: Install dependencies run: pnpm install --frozen-lockfile - name: Build web & sync android run: pnpm mobile:sync:android - name: Build APK (debug)
- run: |
- cd android ./gradlew assembleDebug - name: Upload APK artifact uses: actions/upload-artifact@v4 with:
- name: chatbox-android-apk path: android/app/build/outputs/apk/debug/*.apk```
+      # 4️⃣ 安装 Android SDK（command‑line tools + platform‑tools + build‑tools）
+      - name: Install Android SDK command‑line tools
+        run: |
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          curl -fo ${{ runner.temp }}/sdk-tools.zip \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q ${{ runner.temp }}/sdk-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT \
+            "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+      # 5️⃣ 安装项目依赖
+      - name: Install project dependencies
+        run: |
+          npm ci   # 若使用 pnpm：pnpm install --frozen-lockfile
+
+      # 6️⃣（可选）编译 Electron 桌面端（如果只想生成 APK，可省略此步）
+      - name: Build Electron app (optional)
+        run: |
+          npm run build   # 或 npm run package
+
+      # 7️⃣ 使用 electron‑builder 打包 Android APK
+      - name: Build Android APK with electron‑builder
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 确保 electron‑builder 已安装（项目的 devDependencies 中已有）
+          npx electron-builder --linux apk \
+            --publish=never \
+            --config electron-builder.yml
+
+          # 生成的文件默认位于 release/app/dist/
+          ls -R release/app/dist
+
+      # 8️⃣ 将 APK 上传为工作流产出（artifact），便于调试或手动下载
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatbox-android-apk
+          path: release/app/dist/*.apk
+
+      # 9️⃣ 若是 tag 推送，创建/更新 GitHub Release 并把 APK 上传
+      - name: Create GitHub Release & upload APK
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          RELEASE_NAME="Chatbox Android $TAG_NAME"
+          # 创建 Release（如果已存在则忽略错误）
+          gh release create "$TAG_NAME" \
+            --title "$RELEASE_NAME" \
+            --notes "自动构建的 Android APK，基于 commit $(git rev-parse --short HEAD)." \
+            || true
+
+          # 上传所有生成的 APK（若有多个会全部上传）
+          for apk in release/app/dist/*.apk; do
+            gh release upload "$TAG_NAME" "$apk" --clobber
+          done
